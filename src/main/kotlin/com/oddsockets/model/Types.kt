@@ -457,7 +457,7 @@ object Constants {
     const val USER_AGENT = "$SDK_NAME/$SDK_VERSION"
     
     /** Default manager URL. */
-    const val DEFAULT_MANAGER_URL = "https://manager1.oddsockets.tyga.network"
+    const val DEFAULT_MANAGER_URL = "https://connect.oddsockets.tyga.network"
     
     /** Default timeout in seconds. */
     const val DEFAULT_TIMEOUT_SECONDS = 10L

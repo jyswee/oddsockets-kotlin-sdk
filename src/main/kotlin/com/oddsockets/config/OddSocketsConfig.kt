@@ -12,7 +12,7 @@ import kotlin.time.Duration.Companion.seconds
  * Use [OddSocketsConfigBuilder] for a fluent configuration experience.
  *
  * @property apiKey The OddSockets API key (required)
- * @property managerUrl The manager URL (defaults to https://manager1.oddsockets.tyga.network)
+ * @property managerUrl The manager URL (defaults to https://connect.oddsockets.tyga.network)
  * @property userId The user identifier (optional, auto-generated if not provided)
  * @property autoConnect Whether the client should auto-connect on creation (default: true)
  * @property reconnectAttempts The maximum number of reconnection attempts (default: 5)
@@ -22,7 +22,7 @@ import kotlin.time.Duration.Companion.seconds
 @Serializable
 data class OddSocketsConfig(
     val apiKey: String,
-    val managerUrl: String = "https://manager1.oddsockets.tyga.network",
+    val managerUrl: String = "https://connect.oddsockets.tyga.network",
     val userId: String? = null,
     val autoConnect: Boolean = true,
     val reconnectAttempts: Int = 5,
@@ -75,7 +75,7 @@ data class OddSocketsConfig(
  */
 class OddSocketsConfigBuilder {
     private var apiKey: String = ""
-    private var managerUrl: String = "https://manager1.oddsockets.tyga.network"
+    private var managerUrl: String = "https://connect.oddsockets.tyga.network"
     private var userId: String? = null
     private var autoConnect: Boolean = true
     private var reconnectAttempts: Int = 5
@@ -178,7 +178,7 @@ class OddSocketsConfigBuilder {
      * @return The builder instance for chaining
      */
     fun production(): OddSocketsConfigBuilder = apply {
-        managerUrl("https://manager1.oddsockets.tyga.network")
+        managerUrl("https://connect.oddsockets.tyga.network")
         timeout(10.seconds)
         heartbeatInterval(30.seconds)
     }

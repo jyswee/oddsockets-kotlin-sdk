@@ -7,7 +7,7 @@ package com.oddsockets
  * all routing and load balancing transparently.
  */
 class ManagerDiscovery {
-    private val managerUrl = "https://manager1.oddsockets.tyga.network"
+    private val managerUrl = "https://connect.oddsockets.tyga.network"
     
     /**
      * Get the manager URL (always returns the main endpoint)
