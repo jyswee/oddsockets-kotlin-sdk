@@ -20,11 +20,10 @@ dependencies {
     
     // Coroutines for async programming
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    
+
     // Serialization for JSON handling
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
-    
+
     // Networking
     implementation("io.ktor:ktor-client-core:2.3.5")
     implementation("io.ktor:ktor-client-cio:2.3.5")
@@ -32,12 +31,7 @@ dependencies {
     implementation("io.ktor:ktor-client-content-negotiation:2.3.5")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.5")
     implementation("io.ktor:ktor-client-logging:2.3.5")
-    
-    // Android support (optional)
-    compileOnly("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
-    compileOnly("androidx.lifecycle:lifecycle-livedata-ktx:2.7.0")
-    compileOnly("androidx.compose.runtime:runtime:1.5.4")
-    
+
     // Logging
     implementation("io.github.microutils:kotlin-logging-jvm:3.0.5")
     implementation("ch.qos.logback:logback-classic:1.4.11")
@@ -120,45 +114,4 @@ publishing {
 // Signing for Maven Central
 signing {
     sign(publishing.publications["maven"])
-}
-
-// Android library configuration (optional)
-if (project.hasProperty("android")) {
-    apply(plugin = "com.android.library")
-    
-    configure<com.android.build.gradle.LibraryExtension> {
-        namespace = "com.oddsockets.kotlin"
-        compileSdk = 34
-        
-        defaultConfig {
-            minSdk = 21
-            targetSdk = 34
-            
-            testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-            consumerProguardFiles("consumer-rules.pro")
-        }
-        
-        buildTypes {
-            release {
-                isMinifyEnabled = false
-                proguardFiles(
-                    getDefaultProguardFile("proguard-android-optimize.txt"),
-                    "proguard-rules.pro"
-                )
-            }
-        }
-        
-        compileOptions {
-            sourceCompatibility = JavaVersion.VERSION_11
-            targetCompatibility = JavaVersion.VERSION_11
-        }
-        
-        buildFeatures {
-            compose = true
-        }
-        
-        composeOptions {
-            kotlinCompilerExtensionVersion = "1.5.4"
-        }
-    }
 }

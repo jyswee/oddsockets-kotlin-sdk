@@ -78,9 +78,9 @@ class OddSocketsChannel internal constructor(
                 "type" to "subscribe",
                 "channel" to channelName,
                 "options" to mapOf(
-                    "enable_presence" to options.enablePresence,
-                    "retain_history" to options.retainHistory,
-                    "filter_expression" to options.filterExpression
+                    "enablePresence" to options.enablePresence,
+                    "retainHistory" to options.retainHistory,
+                    "filterExpression" to options.filterExpression
                 )
             )
             
@@ -300,9 +300,9 @@ class OddSocketsChannel internal constructor(
             val response = client.sendChannelRequest(request)
             
             if (response["success"] == true) {
-                val presenceData = response["presence"] ?: throw ChannelException("No presence data in response", channelName)
-                val presence = Json.decodeFromJsonElement<PresenceInfo>(Json.encodeToJsonElement(presenceData))
-                
+                val presence = response["presence"] as? PresenceInfo
+                    ?: throw ChannelException("No presence data in response", channelName)
+
                 _presenceInfo.value = presence
                 logger.debug { "Retrieved presence for channel $channelName: ${presence.count} users" }
                 return presence

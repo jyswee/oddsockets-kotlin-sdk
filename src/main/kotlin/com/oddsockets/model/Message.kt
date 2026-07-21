@@ -3,6 +3,10 @@ package com.oddsockets.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
 import java.time.Instant
 import java.util.*
 
@@ -37,10 +41,13 @@ data class Message(
      * @param T The target type
      * @return The data cast to type T, or null if casting fails
      */
-    inline fun <reified T> dataAs(): T? = try {
-        kotlinx.serialization.json.Json.decodeFromJsonElement<T>(data ?: return null)
-    } catch (e: Exception) {
-        null
+    inline fun <reified T> dataAs(): T? {
+        val element = data ?: return null
+        return try {
+            Json.decodeFromJsonElement<T>(element)
+        } catch (e: Exception) {
+            null
+        }
     }
     
     /**
@@ -74,11 +81,13 @@ data class Message(
      * @param T The target type
      * @return The metadata value cast to type T, or null if not found or casting fails
      */
-    inline fun <reified T> getMetadataAs(key: String): T? = try {
+    inline fun <reified T> getMetadataAs(key: String): T? {
         val element = metadata?.get(key) ?: return null
-        kotlinx.serialization.json.Json.decodeFromJsonElement<T>(element)
-    } catch (e: Exception) {
-        null
+        return try {
+            Json.decodeFromJsonElement<T>(element)
+        } catch (e: Exception) {
+            null
+        }
     }
     
     /**
@@ -232,7 +241,7 @@ data class BulkMessage(
             options: PublishOptions? = null
         ): BulkMessage = BulkMessage(
             channel = channel,
-            message = kotlinx.serialization.json.Json.encodeToJsonElement(message),
+            message = Json.encodeToJsonElement(message),
             options = options
         )
     }
