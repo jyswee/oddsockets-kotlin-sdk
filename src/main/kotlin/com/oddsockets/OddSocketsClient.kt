@@ -62,7 +62,17 @@ class OddSocketsClient(
     private val webSocketSession = AtomicReference<WebSocketSession?>(null)
     private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var readerJob: Job? = null
     private var reconnectAttempts = 0
+
+    // Set while a caller-initiated disconnect is tearing the connection down, so
+    // the reader's teardown does not misfire the reconnection loop.
+    @Volatile
+    private var intentionalDisconnect = false
+
+    // Socket.IO handshake gate + in-flight request correlation.
+    private var connectAck: CompletableDeferred<Unit>? = null
+    private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
     
     // Event handling
     private val eventHandlers = ConcurrentHashMap<EventType, MutableList<SuspendEventHandler>>()
@@ -123,6 +133,7 @@ class OddSocketsClient(
         }
         
         logger.info { "Connecting to OddSockets..." }
+        intentionalDisconnect = false
         updateConnectionState(ConnectionState.CONNECTING)
         
         try {
@@ -157,7 +168,8 @@ class OddSocketsClient(
      */
     suspend fun disconnect() {
         logger.info { "Disconnecting from OddSockets..." }
-        
+        intentionalDisconnect = true
+
         // Cancel reconnection attempts
         reconnectJob?.cancel()
         reconnectJob = null
@@ -165,7 +177,15 @@ class OddSocketsClient(
         // Stop heartbeat
         heartbeatJob?.cancel()
         heartbeatJob = null
-        
+
+        // Stop the frame reader
+        readerJob?.cancel()
+        readerJob = null
+
+        // Fail any in-flight requests so callers don't hang
+        pendingResponses.values.forEach { it.cancel() }
+        pendingResponses.clear()
+
         // Close WebSocket connection
         webSocketSession.get()?.close()
         webSocketSession.set(null)
@@ -352,79 +372,167 @@ class OddSocketsClient(
     }
     
     private suspend fun connectToWorker(workerUrl: String) {
-        val wsUrl = workerUrl.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
-        
+        val uri = java.net.URI(workerUrl)
+        val secure = uri.scheme == "https" || uri.scheme == "wss"
+        val resolvedPort = when {
+            uri.port != -1 -> uri.port
+            secure -> 443
+            else -> 80
+        }
+
+        val ack = CompletableDeferred<Unit>()
+        connectAck = ack
+
         try {
-            httpClient.webSocket(
-                method = HttpMethod.Get,
-                host = java.net.URL(wsUrl).host,
-                port = java.net.URL(wsUrl).port.takeIf { it != -1 } ?: if (wsUrl.startsWith("wss://")) 443 else 80,
-                path = java.net.URL(wsUrl).path
-            ) {
-                webSocketSession.set(this)
-                
-                // Send authentication
-                send(Json.encodeToString(mapOf(
-                    "type" to "auth",
-                    "api_key" to config.apiKey,
-                    "user_id" to userId
-                )))
-                
-                // Handle incoming messages
-                for (frame in incoming) {
-                    when (frame) {
-                        is Frame.Text -> {
-                            handleWebSocketMessage(frame.readText())
-                        }
-                        is Frame.Close -> {
-                            logger.info { "WebSocket connection closed" }
-                            handleDisconnection()
-                            break
-                        }
-                        else -> {
-                            // Ignore other frame types
-                        }
-                    }
+            // The OddSockets worker speaks Socket.IO (Engine.IO v4), so we open the
+            // WebSocket on the Socket.IO endpoint and drive the handshake by hand.
+            val session = httpClient.webSocketSession {
+                url {
+                    protocol = if (secure) URLProtocol.WSS else URLProtocol.WS
+                    host = uri.host
+                    port = resolvedPort
+                    encodedPath = "/socket.io/"
+                    parameters.append("EIO", "4")
+                    parameters.append("transport", "websocket")
                 }
             }
+            webSocketSession.set(session)
+
+            // Read frames on a background coroutine so the handshake and every
+            // subsequent event are processed without blocking the caller.
+            readerJob = scope.launch {
+                try {
+                    for (frame in session.incoming) {
+                        if (frame is Frame.Text) {
+                            handleEngineFrame(frame.readText())
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    // Reader cancelled by an intentional disconnect - not an error.
+                } catch (e: Exception) {
+                    logger.debug(e) { "WebSocket reader stopped" }
+                } finally {
+                    handleDisconnection()
+                }
+            }
+
+            // Block until the worker acknowledges the Socket.IO CONNECT.
+            withTimeout(config.timeout) { ack.await() }
+        } catch (e: TimeoutCancellationException) {
+            throw ConnectionException("Timed out waiting for worker Socket.IO handshake")
+        } catch (e: AuthenticationException) {
+            throw e
         } catch (e: Exception) {
             throw ConnectionException("Failed to connect to worker: ${e.message}", cause = e)
         }
     }
-    
-    private suspend fun handleWebSocketMessage(messageText: String) {
-        try {
-            val messageData = Json.parseToJsonElement(messageText).jsonObject
-            val type = messageData["type"]?.jsonPrimitive?.content
-            
-            when (type) {
-                "auth_success" -> {
-                    logger.debug { "Authentication successful" }
+
+    /**
+     * Handles a single Engine.IO frame (the first character is the packet type).
+     */
+    private suspend fun handleEngineFrame(text: String) {
+        if (text.isEmpty()) return
+        when (text[0]) {
+            '0' -> {
+                // OPEN — reply with a Socket.IO CONNECT carrying the auth payload.
+                // The worker reads apiKey/userId off socket.handshake.auth.
+                val auth = buildJsonObject {
+                    put("apiKey", config.apiKey)
+                    put("userId", userId)
                 }
-                "auth_error" -> {
-                    val error = messageData["error"]?.jsonPrimitive?.content ?: "Authentication failed"
-                    throw AuthenticationException(error)
+                webSocketSession.get()?.send(Frame.Text("40" + auth.toString()))
+            }
+            '2' -> {
+                // PING — keep the connection alive with a PONG.
+                webSocketSession.get()?.send(Frame.Text("3"))
+            }
+            '4' -> handleSocketMessage(text.substring(1))
+            else -> {
+                // 3 = PONG, 1 = CLOSE, 6 = NOOP — nothing to do.
+            }
+        }
+    }
+
+    /**
+     * Handles a Socket.IO packet (body is everything after the Engine.IO MESSAGE type).
+     */
+    private suspend fun handleSocketMessage(body: String) {
+        if (body.isEmpty()) return
+        when (body[0]) {
+            '0' -> connectAck?.complete(Unit)          // CONNECT acknowledged
+            '1' -> handleDisconnection()               // DISCONNECT
+            '2' -> {                                    // EVENT: 2[<ackId>]["event", payload]
+                val jsonStart = body.indexOf('[')
+                if (jsonStart == -1) return
+                val array = try {
+                    Json.parseToJsonElement(body.substring(jsonStart)).jsonArray
+                } catch (e: Exception) {
+                    logger.warn(e) { "Failed to parse Socket.IO event: $body" }
+                    return
                 }
-                "message" -> {
-                    val message = Json.decodeFromJsonElement<Message>(messageData["data"]!!)
-                    handleIncomingMessage(message)
-                }
-                "presence" -> {
-                    val presence = Json.decodeFromJsonElement<PresenceInfo>(messageData["data"]!!)
-                    handlePresenceUpdate(presence)
-                }
-                "error" -> {
-                    val error = messageData["error"]?.jsonPrimitive?.content ?: "Unknown error"
-                    emitEvent(EventType.ERROR, GenericException(error))
-                }
-                else -> {
-                    logger.debug { "Unknown message type: $type" }
+                val event = array.getOrNull(0)?.jsonPrimitive?.contentOrNull ?: return
+                dispatchSocketEvent(event, array.getOrNull(1))
+            }
+            '4' -> {                                    // CONNECT_ERROR (usually auth)
+                val jsonStart = body.indexOf('{')
+                val message = if (jsonStart != -1) {
+                    runCatching {
+                        Json.parseToJsonElement(body.substring(jsonStart))
+                            .jsonObject["message"]?.jsonPrimitive?.contentOrNull
+                    }.getOrNull()
+                } else null
+                connectAck?.completeExceptionally(
+                    AuthenticationException(message ?: "Connection rejected by worker")
+                )
+            }
+            else -> {
+                // ACK (3) and binary packets are not used by this SDK.
+            }
+        }
+    }
+
+    /**
+     * Routes a decoded Socket.IO event either to the correlated request waiter or
+     * to the broadcast handlers (messages / presence changes / errors).
+     */
+    private suspend fun dispatchSocketEvent(event: String, payload: JsonElement?) {
+        val obj = payload as? JsonObject
+        when (event) {
+            "message" -> if (obj != null) handleIncomingMessage(messageFromWorker(obj))
+            "presence_change" -> {
+                val channelName = obj?.get("channel")?.jsonPrimitive?.contentOrNull
+                val occupancy = obj?.get("occupancy")?.jsonPrimitive?.intOrNull ?: 0
+                if (channelName != null) {
+                    handlePresenceUpdate(PresenceInfo(channelName, emptyList(), occupancy))
                 }
             }
-        } catch (e: Exception) {
-            logger.error(e) { "Error handling WebSocket message: $messageText" }
-            emitEvent(EventType.ERROR, OddSocketsException.from(e))
+            "error" -> {
+                val type = obj?.get("type")?.jsonPrimitive?.contentOrNull ?: "ERROR"
+                val message = obj?.get("message")?.jsonPrimitive?.contentOrNull ?: "Unknown error"
+                emitEvent(EventType.ERROR, GenericException("$type: $message"))
+            }
+            "subscribed", "unsubscribed", "published", "presence", "history" -> {
+                val channelName = obj?.get("channel")?.jsonPrimitive?.contentOrNull ?: ""
+                pendingResponses.remove("$event:$channelName")?.complete(obj ?: JsonObject(emptyMap()))
+            }
+            else -> logger.debug { "Unhandled Socket.IO event: $event" }
         }
+    }
+
+    /**
+     * Adapts the worker's broadcast message envelope into the SDK Message model.
+     * The worker nests the user payload under "message" and the sender under
+     * "publisher.userId".
+     */
+    private fun messageFromWorker(obj: JsonObject): Message {
+        val publisher = obj["publisher"] as? JsonObject
+        return Message(
+            id = obj["id"]?.jsonPrimitive?.contentOrNull ?: OddSocketsUtils.generateMessageId(),
+            channel = obj["channel"]?.jsonPrimitive?.contentOrNull ?: "",
+            data = obj["message"],
+            userId = publisher?.get("userId")?.jsonPrimitive?.contentOrNull,
+            metadata = obj["metadata"] as? JsonObject
+        )
     }
     
     private suspend fun handleIncomingMessage(message: Message) {
@@ -449,6 +557,8 @@ class OddSocketsClient(
     }
     
     private suspend fun handleDisconnection() {
+        // A caller-initiated disconnect tears things down itself; don't reconnect.
+        if (intentionalDisconnect) return
         if (isConnected) {
             updateConnectionState(ConnectionState.RECONNECTING)
             startReconnection()
@@ -488,6 +598,8 @@ class OddSocketsClient(
                 try {
                     sendRequest(mapOf("type" to "ping"))
                     delay(config.heartbeatInterval)
+                } catch (e: CancellationException) {
+                    break
                 } catch (e: Exception) {
                     logger.error(e) { "Heartbeat failed" }
                     break
@@ -498,17 +610,101 @@ class OddSocketsClient(
     
     private suspend fun sendRequest(request: Map<String, Any?>): Map<String, Any?> {
         val session = webSocketSession.get() ?: throw ConnectionException("Not connected")
-        
-        return withTimeout(config.timeout) {
-            val requestId = OddSocketsUtils.generateMessageId()
-            val requestWithId = request + ("request_id" to requestId)
-            
-            session.send(Json.encodeToString(requestWithId))
-            
-            // For simplicity, return empty map. In a real implementation,
-            // you'd wait for the response with the matching request_id
-            emptyMap()
+        val type = request["type"] as? String ?: throw GenericException("Request is missing a type")
+
+        // Socket.IO maintains its own Engine.IO heartbeat, so an application-level
+        // ping is a no-op here.
+        if (type == "ping") return emptyMap()
+
+        val channelName = request["channel"] as? String
+        val (emitName, responseName) = when (type) {
+            "subscribe" -> "subscribe" to "subscribed"
+            "unsubscribe" -> "unsubscribe" to "unsubscribed"
+            "publish" -> "publish" to "published"
+            "get_presence" -> "get_presence" to "presence"
+            "get_history" -> "get_history" to "history"
+            else -> throw GenericException("Unsupported request type: $type")
         }
+
+        // Build the Socket.IO event payload from the request (minus the routing
+        // key). Null values are omitted so the worker's own destructuring
+        // defaults apply (e.g. `options = {}`) instead of receiving JSON null.
+        val payload = buildJsonObject {
+            for ((key, value) in request) {
+                if (key == "type" || value == null) continue
+                put(key, anyToJson(value))
+            }
+        }
+
+        val correlationKey = "$responseName:${channelName ?: ""}"
+        val deferred = CompletableDeferred<JsonObject>()
+        pendingResponses[correlationKey] = deferred
+
+        return try {
+            withTimeout(config.timeout) {
+                val encoded = JsonArray(listOf(JsonPrimitive(emitName), payload)).toString()
+                session.send(Frame.Text("42$encoded"))
+                adaptResponse(type, deferred.await())
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw TimeoutException.operationTimeout(type, config.timeout.inWholeSeconds)
+        } finally {
+            pendingResponses.remove(correlationKey)
+        }
+    }
+
+    /**
+     * Recursively converts the loosely-typed request maps that channels build into
+     * JSON, so they can be encoded into a Socket.IO event.
+     */
+    private fun anyToJson(value: Any?): JsonElement = when (value) {
+        null -> JsonNull
+        is JsonElement -> value
+        is String -> JsonPrimitive(value)
+        is Boolean -> JsonPrimitive(value)
+        is Int -> JsonPrimitive(value)
+        is Long -> JsonPrimitive(value)
+        is Double -> JsonPrimitive(value)
+        is Map<*, *> -> buildJsonObject { value.forEach { (k, v) -> put(k.toString(), anyToJson(v)) } }
+        is List<*> -> buildJsonArray { value.forEach { add(anyToJson(it)) } }
+        else -> JsonPrimitive(value.toString())
+    }
+
+    /**
+     * Adapts a worker response event into the map shape the channel layer expects.
+     * The worker uses "messageId"/"occupancy"/"occupants"; channels read
+     * "message_id"/"presence"(count, users).
+     */
+    private fun adaptResponse(type: String, payload: JsonObject): Map<String, Any?> = when (type) {
+        "publish" -> mapOf(
+            "success" to true,
+            "message_id" to (payload["messageId"]?.jsonPrimitive?.contentOrNull
+                ?: payload["message_id"]?.jsonPrimitive?.contentOrNull)
+        )
+        "get_presence" -> {
+            val occupancy = payload["occupancy"]?.jsonPrimitive?.intOrNull
+                ?: payload["count"]?.jsonPrimitive?.intOrNull ?: 0
+            val occupants = payload["occupants"] as? JsonArray ?: JsonArray(emptyList())
+            val users = occupants.mapNotNull { el ->
+                when (el) {
+                    is JsonPrimitive -> el.contentOrNull
+                    is JsonObject -> (el["userId"] ?: el["user_id"] ?: el["id"])
+                        ?.jsonPrimitive?.contentOrNull
+                    else -> null
+                }
+            }
+            val presence = PresenceInfo(
+                channel = payload["channel"]?.jsonPrimitive?.contentOrNull ?: "",
+                users = users,
+                count = occupancy
+            )
+            mapOf("success" to true, "presence" to presence)
+        }
+        "get_history" -> mapOf(
+            "success" to true,
+            "messages" to ((payload["messages"] as? JsonArray)?.toList() ?: emptyList<JsonElement>())
+        )
+        else -> mapOf("success" to true)
     }
     
     private fun updateConnectionState(newState: ConnectionState) {
@@ -592,14 +788,6 @@ class OddSocketsClient(
                 "workerUrl" to workerUrl
             )
         } else null
-    }
-    
-    /**
-     * Get client identifier used for session stickiness
-     * @return Client identifier
-     */
-    fun getClientIdentifier(): String {
-        return clientIdentifier
     }
     
     /**

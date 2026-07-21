@@ -1,6 +1,11 @@
 package com.oddsockets.model
 
+import com.oddsockets.exception.OddSocketsException
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
 
 /**
  * Represents the connection state of the OddSockets client.
@@ -196,7 +201,7 @@ sealed class OddSocketsResult<out T> {
     /**
      * Returns the data if successful, or the default value if failed.
      */
-    fun getOrDefault(defaultValue: T): T = when (this) {
+    fun getOrDefault(defaultValue: @UnsafeVariance T): T = when (this) {
         is Success -> data
         is Failure -> defaultValue
     }
@@ -344,42 +349,42 @@ object JsonElementExtensions {
     /**
      * Converts any object to JsonElement.
      */
-    inline fun <reified T> T.toJsonElement(): kotlinx.serialization.json.JsonElement {
-        return kotlinx.serialization.json.Json.encodeToJsonElement(this)
+    inline fun <reified T> T.toJsonElement(): JsonElement {
+        return Json.encodeToJsonElement(this)
     }
-    
+
     /**
      * Converts JsonElement to a specific type.
      */
-    inline fun <reified T> kotlinx.serialization.json.JsonElement.fromJsonElement(): T? = try {
-        kotlinx.serialization.json.Json.decodeFromJsonElement<T>(this)
+    inline fun <reified T> JsonElement.fromJsonElement(): T? = try {
+        Json.decodeFromJsonElement<T>(this)
     } catch (e: Exception) {
         null
     }
-    
+
     /**
      * Gets a string value from JsonElement.
      */
-    fun kotlinx.serialization.json.JsonElement.asStringOrNull(): String? = try {
-        kotlinx.serialization.json.Json.decodeFromJsonElement<String>(this)
+    fun JsonElement.asStringOrNull(): String? = try {
+        Json.decodeFromJsonElement<String>(this)
     } catch (e: Exception) {
         null
     }
-    
+
     /**
      * Gets an int value from JsonElement.
      */
-    fun kotlinx.serialization.json.JsonElement.asIntOrNull(): Int? = try {
-        kotlinx.serialization.json.Json.decodeFromJsonElement<Int>(this)
+    fun JsonElement.asIntOrNull(): Int? = try {
+        Json.decodeFromJsonElement<Int>(this)
     } catch (e: Exception) {
         null
     }
-    
+
     /**
      * Gets a boolean value from JsonElement.
      */
-    fun kotlinx.serialization.json.JsonElement.asBooleanOrNull(): Boolean? = try {
-        kotlinx.serialization.json.Json.decodeFromJsonElement<Boolean>(this)
+    fun JsonElement.asBooleanOrNull(): Boolean? = try {
+        Json.decodeFromJsonElement<Boolean>(this)
     } catch (e: Exception) {
         null
     }
@@ -434,6 +439,7 @@ object OddSocketsUtils {
     /**
      * Creates multiple bulk messages with different data types.
      */
+    @JvmName("bulkMessagesTyped")
     inline fun <reified T> bulkMessages(
         channel: String,
         messages: List<T>,

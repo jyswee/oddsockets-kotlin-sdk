@@ -1,0 +1,82 @@
+# OddSockets Kotlin SDK - live two-client round-trip PROOF
+#
+# Captured 2026-07-21T23:16:52Z against the LIVE OddSockets platform.
+# Built and run straight from the SDK sources via demo/Dockerfile:
+#
+#   docker build -f demo/Dockerfile -t oddsockets-kotlin-demo .
+#   docker run --rm -e ODDSOCKETS_API_KEY=ak_your_key_here oddsockets-kotlin-demo
+#
+# TWO independent clients (subscriber alice + publisher bob) on separate
+# connections. alice receiving bob's uniquely-nonced message can ONLY have
+# travelled through the OddSockets worker - it is not a local echo. API key
+# is redacted below; everything else is the verbatim run.
+#
+# Process exit code: 0 (0 = cross-client round-trip verified)
+
+23:16:48.359 [main] INFO com.oddsockets.OddSocketsClient -- OddSockets client initialized for user: alice
+23:16:48.363 [main] INFO com.oddsockets.OddSocketsClient -- OddSockets client initialized for user: bob
+[connect] connecting both clients...
+23:16:48.372 [main] INFO com.oddsockets.OddSocketsClient -- Connecting to OddSockets...
+23:16:48.384 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Disconnected -> Connecting
+23:16:48.462 [main] INFO io.ktor.client.HttpClient -- REQUEST: https://connect.oddsockets.tyga.network/api/cluster/select-worker?apiKey=ak_mrrq...&userId=alice&clientIdentifier=fcqnd1_alice
+METHOD: HttpMethod(value=GET)
+23:16:49.432 [main] INFO io.ktor.client.HttpClient -- RESPONSE: 200 OK
+METHOD: HttpMethod(value=GET)
+FROM: https://connect.oddsockets.tyga.network/api/cluster/select-worker?apiKey=ak_mrrq...&userId=alice&clientIdentifier=fcqnd1_alice
+[alice] worker [instance]
+23:16:49.524 [DefaultDispatcher-worker-7] INFO io.ktor.client.HttpClient -- REQUEST: wss://worker1-2.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
+METHOD: HttpMethod(value=GET)
+23:16:49.898 [DefaultDispatcher-worker-12] INFO io.ktor.client.HttpClient -- RESPONSE: 101 Switching Protocols
+METHOD: HttpMethod(value=GET)
+FROM: wss://worker1-2.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
+23:16:50.386 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connecting -> Connected
+23:16:50.390 [main] INFO com.oddsockets.OddSocketsClient -- Connected to OddSockets worker: [instance]
+23:16:50.390 [main] INFO com.oddsockets.OddSocketsClient -- Connecting to OddSockets...
+23:16:50.390 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Disconnected -> Connecting
+23:16:50.393 [main] INFO io.ktor.client.HttpClient -- REQUEST: https://connect.oddsockets.tyga.network/api/cluster/select-worker?apiKey=ak_mrrq...&userId=bob&clientIdentifier=fcqnd1_bob
+METHOD: HttpMethod(value=GET)
+23:16:50.668 [main] INFO io.ktor.client.HttpClient -- RESPONSE: 200 OK
+METHOD: HttpMethod(value=GET)
+FROM: https://connect.oddsockets.tyga.network/api/cluster/select-worker?apiKey=ak_mrrq...&userId=bob&clientIdentifier=fcqnd1_bob
+[bob]   worker [instance]
+23:16:50.673 [DefaultDispatcher-worker-7] INFO io.ktor.client.HttpClient -- REQUEST: wss://worker1-2.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
+METHOD: HttpMethod(value=GET)
+23:16:51.004 [DefaultDispatcher-worker-9] INFO io.ktor.client.HttpClient -- RESPONSE: 101 Switching Protocols
+METHOD: HttpMethod(value=GET)
+FROM: wss://worker1-2.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
+23:16:51.043 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connecting -> Connected
+23:16:51.043 [main] INFO com.oddsockets.OddSocketsClient -- Connected to OddSockets worker: [instance]
+[connect] alice = Connected, bob = Connected
+23:16:51.052 [main] INFO com.oddsockets.OddSocketsChannel -- Subscribing to channel: demo-368403
+23:16:51.126 [main] INFO com.oddsockets.OddSocketsChannel -- Successfully subscribed to channel: demo-368403
+23:16:51.126 [main] DEBUG com.oddsockets.OddSocketsChannel -- Getting presence for channel: demo-368403
+23:16:51.194 [main] DEBUG com.oddsockets.OddSocketsChannel -- Retrieved presence for channel demo-368403: 1 users
+[alice] subscribed to demo-368403 (presence on)
+23:16:51.205 [main] DEBUG com.oddsockets.OddSocketsChannel -- Publishing message to channel: demo-368403
+23:16:51.294 [DefaultDispatcher-worker-13] DEBUG com.oddsockets.OddSocketsClient -- Received message on channel demo-368403
+23:16:51.294 [main] DEBUG com.oddsockets.OddSocketsChannel -- Message published successfully: e5b3a9ee-4527-48c8-981c-1ab7c0b48125
+23:16:51.294 [DefaultDispatcher-worker-13] DEBUG com.oddsockets.OddSocketsChannel -- Handling message for channel: demo-368403
+[bob] published, messageId = e5b3a9ee-4527-48c8-981c-1ab7c0b48125
+[alice] received bob's message (nonce matched) - real round-trip.
+23:16:51.295 [main] DEBUG com.oddsockets.OddSocketsChannel -- Getting presence for channel: demo-368403
+23:16:51.394 [main] DEBUG com.oddsockets.OddSocketsChannel -- Retrieved presence for channel demo-368403: 1 users
+[alice] presence: 1 user(s).
+23:16:51.399 [main] INFO com.oddsockets.OddSocketsChannel -- Unsubscribing from channel: demo-368403
+23:16:51.454 [main] INFO com.oddsockets.OddSocketsChannel -- Successfully unsubscribed from channel: demo-368403
+[alice] unsubscribed.
+23:16:51.456 [main] INFO com.oddsockets.OddSocketsClient -- Disconnecting from OddSockets...
+23:16:51.467 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connected -> Disconnected
+23:16:51.471 [main] DEBUG com.oddsockets.OddSocketsChannel -- Handling disconnection for channel: demo-368403
+23:16:51.472 [main] INFO com.oddsockets.OddSocketsClient -- Disconnected from OddSockets
+23:16:51.472 [main] INFO com.oddsockets.OddSocketsClient -- Disconnecting from OddSockets...
+23:16:51.474 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connected -> Disconnected
+23:16:51.474 [main] DEBUG com.oddsockets.OddSocketsChannel -- Handling disconnection for channel: demo-368403
+23:16:51.475 [main] INFO com.oddsockets.OddSocketsClient -- Disconnected from OddSockets
+
+OK - cross-client round-trip verified
+23:16:51.475 [DefaultDispatcher-worker-9] INFO com.oddsockets.OddSocketsClient -- Disconnecting from OddSockets...
+23:16:51.475 [DefaultDispatcher-worker-2] INFO com.oddsockets.OddSocketsClient -- Disconnecting from OddSockets...
+23:16:51.476 [DefaultDispatcher-worker-9] DEBUG com.oddsockets.OddSocketsChannel -- Handling disconnection for channel: demo-368403
+23:16:51.476 [DefaultDispatcher-worker-2] DEBUG com.oddsockets.OddSocketsChannel -- Handling disconnection for channel: demo-368403
+23:16:51.477 [DefaultDispatcher-worker-9] INFO com.oddsockets.OddSocketsClient -- Disconnected from OddSockets
+23:16:51.477 [DefaultDispatcher-worker-2] INFO com.oddsockets.OddSocketsClient -- Disconnected from OddSockets
