@@ -2,12 +2,14 @@ package com.oddsockets.demo
 
 import com.oddsockets.OddSocketsClient
 import com.oddsockets.config.OddSocketsConfig
-import com.oddsockets.model.EventType
 import com.oddsockets.model.subscribeOptions
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.random.Random
@@ -16,16 +18,16 @@ import kotlin.system.exitProcess
 /**
  * OddSockets Kotlin SDK - runnable two-client demo.
  *
- * A genuine end-to-end round-trip using TWO independent clients:
- *   - a SUBSCRIBER (user "alice") that listens on a channel
- *   - a PUBLISHER  (user "bob")   that sends one message
+ * Two genuine end-to-end round-trips, each using TWO independent clients:
+ *   1. Core pub/sub: a SUBSCRIBER ("alice") receives a message a PUBLISHER
+ *      ("bob") sends on its own connection.
+ *   2. Enhanced events: bob fires enhanced.startTyping + enhanced.addReaction
+ *      and alice receives "user_typing" + "reaction_added" on her public raw
+ *      event surface (client.on).
  *
- * Because they are separate connections, a message reaching the subscriber can
+ * Because the two clients are separate connections, anything alice receives can
  * ONLY have travelled through the OddSockets worker - it cannot be a local echo.
- * A matched nonce here is proof of a real Socket.IO round-trip. No mocks.
- *
- * Exercised surface: connect -> subscribe (+presence) -> publish -> receive
- * -> presence -> unsubscribe -> disconnect.
+ * Uses the SAME SDK a consumer installs. No mocks.
  */
 @Serializable
 data class DemoMessage(val text: String, val nonce: String, val from: String)
@@ -39,11 +41,18 @@ fun main(): Unit = runBlocking {
         exitProcess(1)
     }
 
-    // A unique channel and nonce so we only ever match our own run.
+    if (!basicRoundTrip(apiKey)) exitProcess(2)
+    println()
+    if (!enhancedRoundTrip(apiKey)) exitProcess(3)
+
+    exitProcess(0)
+}
+
+// ---- Scenario 1: core pub/sub cross-client round-trip ----------------------
+private suspend fun basicRoundTrip(apiKey: String): Boolean {
     val channelName = "demo-${Random.nextInt(100_000, 999_999)}"
     val nonce = "n-${Random.nextLong(0, Long.MAX_VALUE)}"
 
-    // Two independent clients on the same platform.
     val subscriber = OddSocketsClient(
         OddSocketsConfig(apiKey = apiKey, userId = "alice", autoConnect = false)
     )
@@ -51,16 +60,6 @@ fun main(): Unit = runBlocking {
         OddSocketsConfig(apiKey = apiKey, userId = "bob", autoConnect = false)
     )
 
-    subscriber.on(EventType.WORKER_ASSIGNED) { data ->
-        val worker = (data as? Map<*, *>)?.get("workerId")
-        println("[alice] worker $worker")
-    }
-    publisher.on(EventType.WORKER_ASSIGNED) { data ->
-        val worker = (data as? Map<*, *>)?.get("workerId")
-        println("[bob]   worker $worker")
-    }
-
-    // Completed as soon as alice sees bob's message (matching nonce).
     val roundTrip = CompletableDeferred<Unit>()
 
     val result = withTimeoutOrNull(TIMEOUT_MILLIS) {
@@ -69,7 +68,6 @@ fun main(): Unit = runBlocking {
         publisher.connect()
         println("[connect] alice = ${subscriber.getState()}, bob = ${publisher.getState()}")
 
-        // Subscriber joins with presence enabled.
         val inbox = subscriber.channel(channelName)
         inbox.subscribe({ message ->
             val received = message.data?.let { data ->
@@ -82,15 +80,12 @@ fun main(): Unit = runBlocking {
         }, subscribeOptions { enablePresence(true) })
         println("[alice] subscribed to $channelName (presence on)")
 
-        // Publisher sends from its OWN connection.
         val outbox = publisher.channel(channelName)
         val ack = outbox.publish(DemoMessage("hello from bob", nonce, "bob"))
         println("[bob] published, messageId = ${ack.messageId}")
 
-        // Wait for the cross-client delivery.
         roundTrip.await()
 
-        // Inspect presence, then tear down cleanly.
         val presence = inbox.getPresence()
         println("[alice] presence: ${presence.count} user(s).")
         inbox.unsubscribe()
@@ -102,14 +97,83 @@ fun main(): Unit = runBlocking {
     subscriber.close()
     publisher.close()
 
-    if (result != null) {
-        println("\nOK - cross-client round-trip verified")
-        exitProcess(0)
+    return if (result != null) {
+        println("\nOK - cross-client round-trip verified on $channelName")
+        true
     } else {
         System.err.println("\nTIMEOUT - no cross-client delivery within ${TIMEOUT_MILLIS / 1000}s")
-        exitProcess(2)
+        false
     }
 }
+
+// ---- Scenario 2: enhanced-events cross-client receive-path -----------------
+private suspend fun enhancedRoundTrip(apiKey: String): Boolean {
+    val channelName = "enh-${Random.nextInt(100_000, 999_999)}"
+
+    val subscriber = OddSocketsClient(
+        OddSocketsConfig(apiKey = apiKey, userId = "alice", autoConnect = false)
+    )
+    val publisher = OddSocketsClient(
+        OddSocketsConfig(apiKey = apiKey, userId = "bob", autoConnect = false)
+    )
+
+    val typingSeen = CompletableDeferred<Unit>()
+    val reactionSeen = CompletableDeferred<Unit>()
+
+    // alice listens on her PUBLIC raw event surface - these can only fire if the
+    // broadcast crossed the worker from bob's separate connection.
+    subscriber.on("user_typing") { data ->
+        val userId = stringProp(data, "userId")
+        if (userId == "bob") {
+            println("[alice] received 'user_typing' from bob - broadcast round-trip.")
+            typingSeen.complete(Unit)
+        }
+    }
+    subscriber.on("reaction_added") { _ ->
+        println("[alice] received 'reaction_added' (:thumbsup:) from bob - broadcast round-trip.")
+        reactionSeen.complete(Unit)
+    }
+
+    val result = withTimeoutOrNull(TIMEOUT_MILLIS) {
+        println("[connect] connecting both clients...")
+        subscriber.connect()
+        publisher.connect()
+
+        val aliceRoom = subscriber.channel(channelName)
+        val bobRoom = publisher.channel(channelName)
+        aliceRoom.subscribe({ }, subscribeOptions { enablePresence(true) })
+        bobRoom.subscribe({ }, subscribeOptions { enablePresence(true) })
+        println("[both] subscribed to $channelName")
+
+        // bob publishes a message so there is a real messageId to react to.
+        val ack = bobRoom.publish(DemoMessage("reactable", "n/a", "bob"))
+        println("[bob] published messageId=${ack.messageId}")
+
+        println("[bob] enhanced.startTyping(bob) ...")
+        publisher.enhanced.startTyping("bob", channelName)
+
+        println("[bob] enhanced.addReaction :thumbsup: ...")
+        publisher.enhanced.addReaction(ack.messageId, channelName, ":thumbsup:", "bob", "Bob")
+
+        awaitAll(typingSeen, reactionSeen)
+    }
+
+    subscriber.disconnect()
+    publisher.disconnect()
+    subscriber.close()
+    publisher.close()
+
+    return if (result != null) {
+        println("\nOK - enhanced broadcast receive-path verified (user_typing + reaction_added)")
+        true
+    } else {
+        System.err.println("\nTIMEOUT - enhanced broadcasts not received within ${TIMEOUT_MILLIS / 1000}s")
+        false
+    }
+}
+
+private fun stringProp(data: JsonElement?, name: String): String? =
+    runCatching { data?.jsonObject?.get(name)?.jsonPrimitive?.contentOrNull }.getOrNull()
 
 private fun printSignupInstructions() {
     System.err.println(

@@ -1,10 +1,16 @@
 # OddSockets Kotlin SDK - Demo
 
-A tiny, runnable program that proves a real real-time round-trip against OddSockets
-using **two independent clients**: **connect -> subscribe -> publish -> receive**.
+A tiny, runnable program that proves two real real-time round-trips against OddSockets
+using **two independent clients** (`alice` = subscriber, `bob` = publisher):
+
+1. **Core pub/sub**: connect -> subscribe -> publish -> receive.
+2. **Enhanced events**: bob fires `enhanced.startTyping` and `enhanced.addReaction`;
+   alice receives `user_typing` and `reaction_added` on her public raw event surface
+   (`client.on`) - proving the enhanced (Slack-like) surface is wired to the real
+   Socket.IO transport.
 
 Because the subscriber (`alice`) and the publisher (`bob`) are separate connections,
-a message that reaches the subscriber can only have travelled through the OddSockets
+anything that reaches the subscriber can only have travelled through the OddSockets
 worker - so this doubles as an honest end-to-end regression test (no mocks, no local
 echo). The SDK speaks genuine Socket.IO (Engine.IO v4) over a WebSocket to the
 assigned worker, exactly like the JavaScript and Python SDKs.
@@ -16,16 +22,24 @@ live platform. Reproduce it yourself in one command (see below) - here is a real
 
 ```
 [connect] connecting both clients...
-[alice] worker [instance]
-[bob]   worker [instance]
 [connect] alice = Connected, bob = Connected
-[alice] subscribed to demo-204561 (presence on)
-[bob] published, messageId = c5436b63-5b59-4596-81b3-d1a4cbaaaaa0
+[alice] subscribed to demo-718871 (presence on)
+[bob] published, messageId = 9dacc7fa-58e7-48fd-94bb-4653b4bc8510
 [alice] received bob's message (nonce matched) - real round-trip.
 [alice] presence: 1 user(s).
 [alice] unsubscribed.
 
-OK - cross-client round-trip verified
+OK - cross-client round-trip verified on demo-718871
+
+[connect] connecting both clients...
+[both] subscribed to enh-538426
+[bob] published messageId=5eabeec9-5753-4e66-9991-cc8eda35e745
+[bob] enhanced.startTyping(bob) ...
+[bob] enhanced.addReaction :thumbsup: ...
+[alice] received 'user_typing' from bob - broadcast round-trip.
+[alice] received 'reaction_added' (:thumbsup:) from bob - broadcast round-trip.
+
+OK - enhanced broadcast receive-path verified (user_typing + reaction_added)
 ```
 
 ## 1. Get a free API key
@@ -124,6 +138,8 @@ publisher.disconnect()
 - `client.channel(name)` -> `channel.subscribe(cb, opts)` -> `channel.publish(msg)`
 - **Cross-client delivery**: a message published by `bob` is delivered to `alice`'s
   subscription in real time - provably through the worker, not a local echo
+- **Enhanced events**: `client.enhanced.startTyping` / `addReaction` emitted by `bob`
+  arrive at `alice` as `user_typing` / `reaction_added` on her `client.on(...)` surface
 - Presence tracking, unsubscribe, and graceful disconnect
 - A 15-second timeout so a stalled round-trip is reported as a failure (non-zero exit)
 
