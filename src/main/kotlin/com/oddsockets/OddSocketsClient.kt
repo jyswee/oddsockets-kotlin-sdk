@@ -73,6 +73,18 @@ class OddSocketsClient(
     // Socket.IO handshake gate + in-flight request correlation.
     private var connectAck: CompletableDeferred<Unit>? = null
     private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
+
+    // Raw, string-keyed listeners for enhanced/broadcast events (e.g. "user_typing",
+    // "reaction_added", "thread_reply_success"). Every decoded Socket.IO event is fanned
+    // out here, so the enhanced surface and consumer code can observe worker broadcasts.
+    private val rawListeners = ConcurrentHashMap<String, MutableList<(JsonElement?) -> Unit>>()
+    private val rawOnceListeners = ConcurrentHashMap<String, MutableList<(JsonElement?) -> Unit>>()
+
+    /**
+     * Enhanced (Slack-like) event surface: typing, reactions, threads, DMs, presence,
+     * notifications, message editing and search. Wired to the real Socket.IO transport.
+     */
+    val enhanced: EnhancedFeatures by lazy { EnhancedFeatures(this) }
     
     // Event handling
     private val eventHandlers = ConcurrentHashMap<EventType, MutableList<SuspendEventHandler>>()
@@ -294,6 +306,66 @@ class OddSocketsClient(
     fun offAll() {
         eventHandlers.clear()
     }
+
+    /**
+     * Emit a raw event to the worker over the Socket.IO connection (fire-and-forget).
+     * Used by the enhanced surface to send events such as "start_typing" or "add_reaction".
+     * @param event The event name
+     * @param payload The JSON payload
+     */
+    fun emit(event: String, payload: JsonElement) {
+        val session = webSocketSession.get()
+            ?: throw ConnectionException("Not connected to OddSockets")
+        val encoded = JsonArray(listOf(JsonPrimitive(event), payload)).toString()
+        scope.launch {
+            try {
+                session.send(Frame.Text("42$encoded"))
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to emit event: $event" }
+            }
+        }
+    }
+
+    /**
+     * Register a persistent listener for a raw worker event (e.g. an enhanced broadcast
+     * such as "user_typing" or "reaction_added"). The payload is the decoded JSON element.
+     * @param event The event name
+     * @param handler The listener
+     */
+    fun on(event: String, handler: (JsonElement?) -> Unit) {
+        rawListeners.computeIfAbsent(event) { mutableListOf() }.add(handler)
+    }
+
+    /**
+     * Register a one-shot listener for a raw worker event.
+     * @param event The event name
+     * @param handler The listener
+     */
+    fun once(event: String, handler: (JsonElement?) -> Unit) {
+        rawOnceListeners.computeIfAbsent(event) { mutableListOf() }.add(handler)
+    }
+
+    /**
+     * Removes all raw listeners for a specific event name.
+     * @param event The event name
+     */
+    fun off(event: String) {
+        rawListeners.remove(event)
+        rawOnceListeners.remove(event)
+    }
+
+    private fun dispatchRawListeners(event: String, payload: JsonElement?) {
+        rawListeners[event]?.toList()?.forEach { safeInvokeRaw(it, payload) }
+        rawOnceListeners.remove(event)?.forEach { safeInvokeRaw(it, payload) }
+    }
+
+    private fun safeInvokeRaw(handler: (JsonElement?) -> Unit, payload: JsonElement?) {
+        try {
+            handler(payload)
+        } catch (e: Exception) {
+            logger.error(e) { "Error in raw event handler" }
+        }
+    }
     
     /**
      * Closes the client and releases resources.
@@ -496,6 +568,11 @@ class OddSocketsClient(
      * to the broadcast handlers (messages / presence changes / errors).
      */
     private suspend fun dispatchSocketEvent(event: String, payload: JsonElement?) {
+        // Fan every named event out to raw listeners first, so enhanced broadcasts
+        // (user_typing, reaction_added, ...) and correlated success/error events reach
+        // the enhanced surface and any consumer client.on(event) subscription.
+        dispatchRawListeners(event, payload)
+
         val obj = payload as? JsonObject
         when (event) {
             "message" -> if (obj != null) handleIncomingMessage(messageFromWorker(obj))
