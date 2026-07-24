@@ -691,6 +691,12 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a href="#enhanced" class="nav-link">
+                            <i class="fas fa-bolt nav-icon"></i>
+                            Enhanced Features
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a href="#performance" class="nav-link">
                             <i class="fas fa-chart-line nav-icon"></i>
                             Performance
@@ -809,7 +815,7 @@
                             </button>
                         </div>
                         <pre><code class="language-kotlin">dependencies {
-    implementation("com.oddsockets:kotlin-sdk:1.0.0")
+    implementation("com.oddsockets:oddsockets-kotlin-sdk:0.1.0-beta.1")
 }</code></pre>
                     </div>
                 </div>
@@ -824,7 +830,7 @@
                             </button>
                         </div>
                         <pre><code class="language-groovy">dependencies {
-    implementation 'com.oddsockets:kotlin-sdk:1.0.0'
+    implementation 'com.oddsockets:oddsockets-kotlin-sdk:0.1.0-beta.1'
 }</code></pre>
                     </div>
                 </div>
@@ -840,8 +846,8 @@
                         </div>
                         <pre><code class="language-xml">&lt;dependency&gt;
     &lt;groupId&gt;com.oddsockets&lt;/groupId&gt;
-    &lt;artifactId&gt;kotlin-sdk&lt;/artifactId&gt;
-    &lt;version&gt;1.0.0&lt;/version&gt;
+    &lt;artifactId&gt;oddsockets-kotlin-sdk&lt;/artifactId&gt;
+    &lt;version&gt;0.1.0-beta.1&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
                     </div>
                 </div>
@@ -1020,6 +1026,65 @@ channel.publish("Hello World!") {
                         <p>Browse all available examples including Android apps, server-side code, and integration tutorials</p>
                     </a>
                 </div>
+            </section>
+
+            <section id="enhanced" class="section">
+                <h2 class="section-title">
+                    <i class="fas fa-bolt"></i>
+                    Enhanced Features
+                </h2>
+
+                <p>Beyond core pub/sub, OddSockets ships a Slack-like <strong>enhanced surface</strong> &mdash;
+                reactions, typing indicators, threads, read receipts, presence/status, notifications, DMs,
+                channel management, message editing and search. It lives on <code>client.enhanced</code>.
+                <strong>Send</strong> an action with a <code>client.enhanced.*</code> method (camelCase,
+                positional arguments); <strong>receive</strong> the paired broadcast with
+                <code>client.on("&lt;event&gt;") { data -&gt; ... }</code>. The worker forwards every enhanced
+                broadcast onto the client's raw event surface, delivered as a
+                <code>kotlinx.serialization.json.JsonElement?</code>.</p>
+
+                <h3>Typing &amp; Reactions</h3>
+                <pre><code class="language-kotlin">val channel = client.channel("room-42")
+channel.subscribe { msg -&gt; println("Received: $msg") }
+
+// Receive-path: broadcasts from other users on the channel
+client.on("user_typing")    { data -&gt; println("someone is typing: $data") }
+client.on("reaction_added") { data -&gt; println("reaction added: $data") }
+
+// Send-path: enhanced actions over the live socket
+client.enhanced.startTyping("alice", "room-42")
+client.enhanced.addReaction("msg-1", "room-42", ":thumbsup:", "alice", "Alice")</code></pre>
+
+                <h3>Threads</h3>
+                <pre><code class="language-kotlin">client.on("thread_reply") { data -&gt; println("new thread reply: $data") }
+
+// suspend request-style methods return a JsonObject with the worker ack
+val reply = client.enhanced.threadReply(
+    "room-42", "msg-1", "Replying in the thread", "alice", "Alice")
+
+val thread = client.enhanced.getThread("thread-123")</code></pre>
+
+                <p>Each area exposes methods on <code>client.enhanced</code>; the worker broadcasts the paired
+                events which you handle with <code>client.on(...)</code>. Query methods (<code>get*</code>,
+                <code>search*</code>) and the request-style actions are <code>suspend</code> functions that
+                return a <code>JsonObject</code> with the worker response.</p>
+
+                <ul>
+                    <li><strong>Typing</strong> &mdash; <code>startTyping</code>, <code>stopTyping</code> &rarr; <code>user_typing</code>, <code>user_stopped_typing</code></li>
+                    <li><strong>Reactions</strong> &mdash; <code>addReaction</code>, <code>removeReaction</code>, <code>getReactions</code> &rarr; <code>reaction_added</code>, <code>reaction_removed</code></li>
+                    <li><strong>Threads</strong> &mdash; <code>threadReply</code>, <code>getThread</code>, <code>subscribeThread</code>, <code>followThread</code>, <code>unfollowThread</code>, <code>markThreadRead</code> &rarr; <code>thread_reply</code>, <code>thread_subscribed</code>, <code>thread_followed</code>, <code>thread_read_updated</code></li>
+                    <li><strong>Read receipts</strong> &mdash; <code>markRead</code>, <code>markAllRead</code>, <code>getUnreadCounts</code> &rarr; <code>user_read</code>, <code>unread_count_updated</code>, <code>all_marked_read</code></li>
+                    <li><strong>Messages</strong> &mdash; <code>editMessage</code>, <code>deleteMessage</code>, <code>pinMessage</code>, <code>unpinMessage</code>, <code>getPinnedMessages</code> &rarr; <code>message_edited</code>, <code>message_deleted</code>, <code>message_pinned</code>, <code>message_unpinned</code></li>
+                    <li><strong>Presence &amp; status</strong> &mdash; <code>setStatus</code>, <code>setCustomStatus</code>, <code>clearCustomStatus</code>, <code>setDND</code>, <code>clearDND</code>, <code>getUserPresence</code> &rarr; <code>user_status_changed</code>, <code>custom_status_updated</code>, <code>dnd_status_changed</code></li>
+                    <li><strong>Channels</strong> &mdash; <code>createChannel</code>, <code>updateChannel</code>, <code>archiveChannel</code>, <code>inviteToChannel</code>, <code>joinChannel</code>, <code>leaveChannel</code>, <code>getChannelMembers</code> &rarr; <code>channel_created</code>, <code>channel_updated</code>, <code>user_invited</code>, <code>user_joined_channel</code>, <code>user_left_channel</code></li>
+                    <li><strong>DMs</strong> &mdash; <code>createDM</code>, <code>sendDM</code>, <code>getDMConversations</code> &rarr; <code>dm_created</code>, <code>dm_received</code></li>
+                    <li><strong>Notifications</strong> &mdash; <code>subscribeNotifications</code>, <code>getNotifications</code>, <code>markNotificationRead</code>, <code>clearNotifications</code> &rarr; <code>notification</code>, <code>notification_read</code>, <code>notifications_cleared</code></li>
+                    <li><strong>Search</strong> &mdash; <code>searchMessages</code>, <code>searchInChannel</code>, <code>searchByUser</code>, <code>filterMessages</code> &rarr; results returned as <code>JsonObject</code></li>
+                </ul>
+
+                <p>For any worker event not wrapped above, subscribe with the raw
+                <code>client.on("&lt;event&gt;") { ... }</code> API &mdash; all enhanced broadcasts are
+                forwarded onto the client surface.</p>
             </section>
 
             <section id="performance" class="section">
