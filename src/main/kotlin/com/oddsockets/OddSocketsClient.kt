@@ -589,8 +589,18 @@ class OddSocketsClient(
                 emitEvent(EventType.ERROR, GenericException("$type: $message"))
             }
             "subscribed", "unsubscribed", "published", "presence", "history" -> {
-                val channelName = obj?.get("channel")?.jsonPrimitive?.contentOrNull ?: ""
-                pendingResponses.remove("$event:$channelName")?.complete(obj ?: JsonObject(emptyMap()))
+                // The worker emits "history" both as the explicit get_history
+                // RESPONSE (query:true) and as a fire-and-forget on-join snapshot
+                // (~10 msgs, no query flag). Only the query:true response may
+                // complete a pending getHistory waiter; ignore the snapshot here
+                // so it can't resolve getHistory with the wrong data.
+                // BUG-2026-0727-0012.
+                val isHistorySnapshot = event == "history" &&
+                    obj?.get("query")?.jsonPrimitive?.booleanOrNull != true
+                if (!isHistorySnapshot) {
+                    val channelName = obj?.get("channel")?.jsonPrimitive?.contentOrNull ?: ""
+                    pendingResponses.remove("$event:$channelName")?.complete(obj ?: JsonObject(emptyMap()))
+                }
             }
             else -> logger.debug { "Unhandled Socket.IO event: $event" }
         }
