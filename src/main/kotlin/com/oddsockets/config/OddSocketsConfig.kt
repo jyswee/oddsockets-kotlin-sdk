@@ -1,7 +1,8 @@
 package com.oddsockets.config
 
+import com.oddsockets.ManagerDiscovery
+import com.oddsockets.model.Constants
 import kotlinx.serialization.Serializable
-import java.net.URL
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -12,7 +13,10 @@ import kotlin.time.Duration.Companion.seconds
  * Use [OddSocketsConfigBuilder] for a fluent configuration experience.
  *
  * @property apiKey The OddSockets API key (required)
- * @property managerUrl The manager URL (defaults to https://connect.oddsockets.tyga.network)
+ * @property managerUrl The manager URL. When not set explicitly it falls back to the
+ *   ODDSOCKETS_MANAGER_URL environment variable and then to the public default endpoint.
+ *   A URL set here is always used verbatim; the client never substitutes the default
+ *   endpoint when the configured manager is unreachable.
  * @property userId The user identifier (optional, auto-generated if not provided)
  * @property autoConnect Whether the client should auto-connect on creation (default: true)
  * @property reconnectAttempts The maximum number of reconnection attempts (default: 5)
@@ -22,7 +26,7 @@ import kotlin.time.Duration.Companion.seconds
 @Serializable
 data class OddSocketsConfig(
     val apiKey: String,
-    val managerUrl: String = "https://connect.oddsockets.tyga.network",
+    val managerUrl: String = ManagerDiscovery.resolveManagerUrl(null),
     val userId: String? = null,
     val autoConnect: Boolean = true,
     val reconnectAttempts: Int = 5,
@@ -40,11 +44,8 @@ data class OddSocketsConfig(
         require(apiKey.isNotBlank()) { "API key is required" }
         require(apiKey.startsWith("ak_")) { "Invalid API key format" }
         require(managerUrl.isNotBlank()) { "Manager URL is required" }
-        
-        runCatching { URL(managerUrl) }.getOrElse {
-            throw IllegalArgumentException("Invalid manager URL format")
-        }
-        
+        ManagerDiscovery.resolveManagerUrl(managerUrl)
+
         require(reconnectAttempts >= 0) { "Reconnect attempts must be non-negative" }
         require(heartbeatInterval.isPositive()) { "Heartbeat interval must be positive" }
         require(timeout.isPositive()) { "Timeout must be positive" }
@@ -75,7 +76,7 @@ data class OddSocketsConfig(
  */
 class OddSocketsConfigBuilder {
     private var apiKey: String = ""
-    private var managerUrl: String = "https://connect.oddsockets.tyga.network"
+    private var managerUrl: String? = null
     private var userId: String? = null
     private var autoConnect: Boolean = true
     private var reconnectAttempts: Int = 5
@@ -93,7 +94,11 @@ class OddSocketsConfigBuilder {
     
     /**
      * Sets the manager URL.
-     * @param managerUrl The manager URL
+     *
+     * When left unset the ODDSOCKETS_MANAGER_URL environment variable is used,
+     * falling back to the public default endpoint.
+     *
+     * @param managerUrl The manager URL, must be an absolute http(s) URL
      * @return The builder instance for chaining
      */
     fun managerUrl(managerUrl: String): OddSocketsConfigBuilder = apply {
@@ -178,7 +183,7 @@ class OddSocketsConfigBuilder {
      * @return The builder instance for chaining
      */
     fun production(): OddSocketsConfigBuilder = apply {
-        managerUrl("https://connect.oddsockets.tyga.network")
+        managerUrl(Constants.DEFAULT_MANAGER_URL)
         timeout(10.seconds)
         heartbeatInterval(30.seconds)
     }
@@ -191,7 +196,7 @@ class OddSocketsConfigBuilder {
     fun build(): OddSocketsConfig {
         val config = OddSocketsConfig(
             apiKey = apiKey,
-            managerUrl = managerUrl,
+            managerUrl = ManagerDiscovery.resolveManagerUrl(managerUrl),
             userId = userId,
             autoConnect = autoConnect,
             reconnectAttempts = reconnectAttempts,
