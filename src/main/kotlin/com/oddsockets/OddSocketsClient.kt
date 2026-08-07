@@ -385,11 +385,11 @@ class OddSocketsClient(
     }
     
     private suspend fun getWorkerAssignment(): WorkerAssignment {
+        // Resolved outside the catch below so that a misconfigured manager URL surfaces as
+        // an argument error instead of being reported as a connection failure.
+        val managerUrl = ManagerDiscovery.instance.discoverManagerUrl(config.apiKey, config.managerUrl)
+
         return try {
-            // Step 1: Discover the optimal manager URL automatically
-            val managerUrl = ManagerDiscovery.instance.discoverManagerUrl(config.apiKey)
-            
-            // Step 2: Get worker assignment from manager
             val response = httpClient.get("$managerUrl/api/cluster/select-worker") {
                 header("User-Agent", "OddSockets-Kotlin-SDK/1.0.0")
                 parameter("apiKey", config.apiKey)
@@ -435,9 +435,10 @@ class OddSocketsClient(
             }
             
         } catch (e: Exception) {
-            // If manager is offline, try fallback logic
+            // The configured manager is the only manager: report the failure rather than
+            // quietly connecting somewhere else.
             if (e.message?.contains("ECONNREFUSED") == true || e.message?.contains("ENOTFOUND") == true) {
-                throw ConnectionException.workerAssignmentFailed("Manager is offline. Cannot assign worker without session stickiness.")
+                throw ConnectionException.workerAssignmentFailed("Manager $managerUrl is unreachable. Cannot assign worker without session stickiness.")
             }
             throw ConnectionException.workerAssignmentFailed(e.message ?: "Unknown error")
         }

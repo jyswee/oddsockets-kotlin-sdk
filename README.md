@@ -22,6 +22,26 @@ channel.subscribe { msg -> println("Received: $msg") }
 channel.publish(mapOf("text" to "Hello from Kotlin"))
 ```
 
+## Manager URL
+
+The manager URL is resolved in this order:
+
+1. `managerUrl` on `OddSocketsConfig` / `OddSocketsConfigBuilder`
+2. the `ODDSOCKETS_MANAGER_URL` environment variable
+3. `https://connect.oddsockets.tyga.network`
+
+It must be an absolute `http://` or `https://` URL, otherwise an `IllegalArgumentException`
+is thrown with the message `Invalid managerUrl: <value>`. Point it at a self-hosted or
+staging manager and the SDK will use that endpoint and nothing else: if it is unreachable
+the connection fails with the underlying error rather than falling back to the public
+endpoint.
+
+```kotlin
+val client = OddSocketsClient(
+    OddSocketsConfig(apiKey = "YOUR_API_KEY", managerUrl = "https://manager.internal.example.com")
+)
+```
+
 ## Enhanced Features
 
 Beyond core pub/sub, OddSockets ships a Slack-like **enhanced surface** — reactions,
