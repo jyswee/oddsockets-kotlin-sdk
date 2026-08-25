@@ -83,26 +83,29 @@ enum class EventType(val value: String) {
     
     /** Emitted when a worker is assigned. */
     WORKER_ASSIGNED("worker_assigned"),
-    
+
+    /** Emitted after a minted token is silently refreshed ahead of expiry. */
+    TOKEN_REFRESHED("token_refreshed"),
+
     /** Emitted when reconnection attempts are exhausted. */
     MAX_RECONNECT_ATTEMPTS_REACHED("max_reconnect_attempts_reached");
-    
+
     /**
      * Whether the event type represents a connection-related event.
      */
     val isConnectionEvent: Boolean
         get() = when (this) {
-            CONNECTED, DISCONNECTED, RECONNECTED, WORKER_ASSIGNED, MAX_RECONNECT_ATTEMPTS_REACHED -> true
+            CONNECTED, DISCONNECTED, RECONNECTED, WORKER_ASSIGNED, TOKEN_REFRESHED, MAX_RECONNECT_ATTEMPTS_REACHED -> true
             ERROR, MESSAGE, PRESENCE -> false
         }
-    
+
     /**
      * Whether the event type represents a message-related event.
      */
     val isMessageEvent: Boolean
         get() = when (this) {
             MESSAGE, PRESENCE -> true
-            CONNECTED, DISCONNECTED, RECONNECTED, ERROR, WORKER_ASSIGNED, MAX_RECONNECT_ATTEMPTS_REACHED -> false
+            CONNECTED, DISCONNECTED, RECONNECTED, ERROR, WORKER_ASSIGNED, TOKEN_REFRESHED, MAX_RECONNECT_ATTEMPTS_REACHED -> false
         }
     
     override fun toString(): String = value.replace("_", " ").split(" ")
@@ -274,6 +277,27 @@ sealed class OddSocketsResult<out T> {
         }
     }
 }
+
+/**
+ * A short-lived realtime token minted by the control plane, returned by a
+ * [com.oddsockets.config.OddSocketsConfig.tokenProvider] callback. Game/app
+ * clients present this in place of a static API key (FEAT-2026-0824-0040).
+ *
+ * @property token The minted realtime token (required).
+ * @property expiresAt Expiry as an ISO-8601 string or an epoch (seconds or ms)
+ *   rendered as a string; used to time the pre-expiry refresh.
+ * @property exp Expiry as JWT epoch seconds; used when [expiresAt] is absent.
+ * @property baseUrl Optional manager base URL hint from the mint response.
+ * @property identity Optional resolved identity string from the mint response.
+ */
+@Serializable
+data class OddSocketsToken(
+    val token: String,
+    val expiresAt: String? = null,
+    val exp: Long? = null,
+    val baseUrl: String? = null,
+    val identity: String? = null
+)
 
 /**
  * Worker assignment response from the manager.
