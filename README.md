@@ -42,6 +42,41 @@ val client = OddSocketsClient(
 )
 ```
 
+## Token auth for game clients (`tokenProvider`)
+
+Game and app clients should never ship a static API key. Instead, mint a
+short-lived realtime token from your own backend and hand it to the SDK through a
+`tokenProvider` callback. The client resolves a **fresh** token before every
+(re)connect, presents it on the manager/worker handshake in place of an API key,
+and silently refreshes it ahead of expiry.
+
+The callback is a `suspend` function returning an `OddSocketsToken`, so it can do
+its own async HTTP. No `apiKey` is required when a `tokenProvider` is set.
+
+```kotlin
+val config = OddSocketsConfig.builderWithTokenProvider {
+    // Your backend exchanges the player's session for a realtime token.
+    val minted = myBackend.mintRealtimeToken() // suspend HTTP call
+    OddSocketsToken(
+        token = minted.token,
+        expiresAt = minted.expiresAt // ISO-8601 or epoch; used to time the refresh
+    )
+}
+    .userId("player-42")
+    .build()
+
+val client = OddSocketsClient(config)
+client.connect()
+
+// Fired after each silent pre-expiry refresh.
+client.on(EventType.TOKEN_REFRESHED) { info ->
+    // info = mapOf("expiresAt" to <epoch ms of the new token>)
+}
+```
+
+Tune how early the token refreshes with `.tokenRefreshLeadMs(120_000)` on the
+builder (default two minutes).
+
 ## Enhanced Features
 
 Beyond core pub/sub, OddSockets ships a Slack-like **enhanced surface** — reactions,

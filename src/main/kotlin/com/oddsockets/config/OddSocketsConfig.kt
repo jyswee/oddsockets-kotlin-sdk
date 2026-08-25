@@ -2,7 +2,9 @@ package com.oddsockets.config
 
 import com.oddsockets.ManagerDiscovery
 import com.oddsockets.model.Constants
+import com.oddsockets.model.OddSocketsToken
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -22,10 +24,16 @@ import kotlin.time.Duration.Companion.seconds
  * @property reconnectAttempts The maximum number of reconnection attempts (default: 5)
  * @property heartbeatInterval The heartbeat interval (default: 30 seconds)
  * @property timeout The request timeout (default: 10 seconds)
+ * @property tokenProvider A callback that mints a short-lived realtime token
+ *   (FEAT-2026-0824-0040). When set, the client authenticates with a freshly
+ *   resolved token instead of a static [apiKey] and silently refreshes it ahead
+ *   of expiry. Not serialized.
+ * @property tokenRefreshLeadMs How far ahead of expiry the token is refreshed,
+ *   in milliseconds (default: 120000 / two minutes).
  */
 @Serializable
 data class OddSocketsConfig(
-    val apiKey: String,
+    val apiKey: String = "",
     val managerUrl: String = ManagerDiscovery.resolveManagerUrl(null),
     val userId: String? = null,
     val autoConnect: Boolean = true,
@@ -33,16 +41,23 @@ data class OddSocketsConfig(
     @Serializable(with = DurationSerializer::class)
     val heartbeatInterval: Duration = 30.seconds,
     @Serializable(with = DurationSerializer::class)
-    val timeout: Duration = 10.seconds
+    val timeout: Duration = 10.seconds,
+    @Transient
+    val tokenProvider: (suspend () -> OddSocketsToken)? = null,
+    val tokenRefreshLeadMs: Long = 120_000L
 ) {
-    
+
     /**
      * Validates the configuration.
      * @throws IllegalArgumentException if configuration is invalid
      */
     fun validate() {
-        require(apiKey.isNotBlank()) { "API key is required" }
-        require(apiKey.startsWith("ak_")) { "Invalid API key format" }
+        // In token mode (a tokenProvider is set) no static API key is required or
+        // expected; auth is carried by the freshly minted token instead.
+        if (tokenProvider == null) {
+            require(apiKey.isNotBlank()) { "API key is required" }
+            require(apiKey.startsWith("ak_")) { "Invalid API key format" }
+        }
         require(managerUrl.isNotBlank()) { "Manager URL is required" }
         ManagerDiscovery.resolveManagerUrl(managerUrl)
 
@@ -65,6 +80,16 @@ data class OddSocketsConfig(
          * @return A builder instance with the API key set
          */
         fun builder(apiKey: String): OddSocketsConfigBuilder = OddSocketsConfigBuilder().apiKey(apiKey)
+
+        /**
+         * Creates a builder authenticated with a minted-token provider instead of
+         * a static API key (FEAT-2026-0824-0040). Suitable for game/app clients
+         * that must not ship a long-lived key.
+         * @param tokenProvider A callback that mints a fresh realtime token
+         * @return A builder instance with the token provider set
+         */
+        fun builderWithTokenProvider(tokenProvider: suspend () -> OddSocketsToken): OddSocketsConfigBuilder =
+            OddSocketsConfigBuilder().tokenProvider(tokenProvider)
     }
 }
 
@@ -82,7 +107,9 @@ class OddSocketsConfigBuilder {
     private var reconnectAttempts: Int = 5
     private var heartbeatInterval: Duration = 30.seconds
     private var timeout: Duration = 10.seconds
-    
+    private var tokenProvider: (suspend () -> OddSocketsToken)? = null
+    private var tokenRefreshLeadMs: Long = 120_000L
+
     /**
      * Sets the API key.
      * @param apiKey The API key
@@ -90,6 +117,25 @@ class OddSocketsConfigBuilder {
      */
     fun apiKey(apiKey: String): OddSocketsConfigBuilder = apply {
         this.apiKey = apiKey
+    }
+
+    /**
+     * Sets the minted-token provider (FEAT-2026-0824-0040). When set, the client
+     * authenticates with freshly minted tokens instead of a static API key.
+     * @param tokenProvider A callback that mints a fresh realtime token
+     * @return The builder instance for chaining
+     */
+    fun tokenProvider(tokenProvider: suspend () -> OddSocketsToken): OddSocketsConfigBuilder = apply {
+        this.tokenProvider = tokenProvider
+    }
+
+    /**
+     * Sets how far ahead of expiry the minted token is refreshed, in milliseconds.
+     * @param leadMs The refresh lead time in milliseconds (default 120000)
+     * @return The builder instance for chaining
+     */
+    fun tokenRefreshLeadMs(leadMs: Long): OddSocketsConfigBuilder = apply {
+        this.tokenRefreshLeadMs = leadMs
     }
     
     /**
@@ -201,7 +247,9 @@ class OddSocketsConfigBuilder {
             autoConnect = autoConnect,
             reconnectAttempts = reconnectAttempts,
             heartbeatInterval = heartbeatInterval,
-            timeout = timeout
+            timeout = timeout,
+            tokenProvider = tokenProvider,
+            tokenRefreshLeadMs = tokenRefreshLeadMs
         )
         
         config.validate()

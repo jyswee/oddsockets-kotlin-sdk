@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import mu.KotlinLogging
 import java.security.MessageDigest
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.seconds
@@ -64,6 +67,13 @@ class OddSocketsClient(
     private var heartbeatJob: Job? = null
     private var readerJob: Job? = null
     private var reconnectAttempts = 0
+
+    // Minted-token auth state (populated only in token mode, FEAT-2026-0824-0040).
+    @Volatile
+    private var currentToken: String? = null
+    @Volatile
+    private var tokenExpiresAt: Long? = null // epoch ms
+    private var tokenRefreshJob: Job? = null
 
     // Set while a caller-initiated disconnect is tearing the connection down, so
     // the reader's teardown does not misfire the reconnection loop.
@@ -149,20 +159,31 @@ class OddSocketsClient(
         updateConnectionState(ConnectionState.CONNECTING)
         
         try {
+            // Step 0: In token mode, mint a FRESH token before anything else. On a
+            // reconnect this is also the refresh path - a token that expired during
+            // an outage is never replayed, because the provider is always asked
+            // again here (FEAT-2026-0824-0040, "refresh on reconnect").
+            if (isTokenMode) {
+                resolveToken()
+            }
+
             // Get worker assignment from manager
             val assignment = getWorkerAssignment()
             val workerUrl = assignment.url ?: throw ConnectionException.workerAssignmentFailed("No worker URL provided")
-            
+
             _workerInfo.value = assignment.workerId to workerUrl
-            
+
             // Connect to assigned worker
             connectToWorker(workerUrl)
-            
+
             updateConnectionState(ConnectionState.CONNECTED)
             reconnectAttempts = 0
-            
+
             // Start heartbeat
             startHeartbeat()
+
+            // Arm the silent pre-expiry token refresh (token mode only).
+            scheduleTokenRefresh()
             
             emitEvent(EventType.CONNECTED, mapOf("worker_id" to assignment.workerId, "worker_url" to workerUrl))
             logger.info { "Connected to OddSockets worker: ${assignment.workerId}" }
@@ -189,6 +210,10 @@ class OddSocketsClient(
         // Stop heartbeat
         heartbeatJob?.cancel()
         heartbeatJob = null
+
+        // Stop the token refresh timer
+        tokenRefreshJob?.cancel()
+        tokenRefreshJob = null
 
         // Stop the frame reader
         readerJob?.cancel()
@@ -383,7 +408,117 @@ class OddSocketsClient(
     internal suspend fun sendChannelRequest(request: Map<String, Any?>): Map<String, Any?> {
         return sendRequest(request)
     }
-    
+
+    /**
+     * Whether this client authenticates with minted tokens (a tokenProvider is
+     * set) rather than a static API key (FEAT-2026-0824-0040).
+     */
+    private val isTokenMode: Boolean
+        get() = config.tokenProvider != null
+
+    /**
+     * Fetches a fresh minted token from the configured provider and caches it
+     * with its expiry. Called before every (re)connect and by the refresh loop.
+     * Does NOT arm the refresh loop itself - [scheduleTokenRefresh] owns that.
+     */
+    private suspend fun resolveToken() {
+        val provider = config.tokenProvider ?: return
+        val minted = provider()
+        require(minted.token.isNotBlank()) { "tokenProvider returned an empty token" }
+        currentToken = minted.token
+        tokenExpiresAt = expiryFromToken(minted)
+        logger.debug { "Minted realtime token (expiresAt=$tokenExpiresAt)" }
+    }
+
+    /**
+     * Determines the token expiry in epoch ms from the mint response, preferring
+     * an explicit expiresAt, then the JWT `exp` claim, then decoding the token.
+     */
+    private fun expiryFromToken(token: OddSocketsToken): Long? {
+        token.expiresAt?.let { parseExpiresAt(it)?.let { ms -> return ms } }
+        token.exp?.let { return it * 1000 } // JWT exp is epoch seconds
+        return expiryFromJwt(token.token)
+    }
+
+    /**
+     * Parses an expiresAt value that may be an ISO-8601 timestamp or an epoch
+     * (seconds or ms) rendered as a string. Returns epoch ms, or null.
+     */
+    private fun parseExpiresAt(value: String): Long? {
+        value.toLongOrNull()?.let { n ->
+            // Heuristic: values below 1e12 are epoch SECONDS, above are millis.
+            return if (n < 1_000_000_000_000L) n * 1000 else n
+        }
+        return try {
+            OffsetDateTime.parse(value).toInstant().toEpochMilli()
+        } catch (e: Exception) {
+            try {
+                Instant.parse(value).toEpochMilli()
+            } catch (e2: Exception) {
+                null
+            }
+        }
+    }
+
+    /**
+     * Best-effort read of the `exp` claim (epoch seconds) from a JWT WITHOUT
+     * verifying it - the worker is the verifier; the client only needs exp to
+     * time its refresh. Returns epoch ms, or null if unreadable.
+     */
+    private fun expiryFromJwt(token: String): Long? {
+        return try {
+            val parts = token.split('.')
+            if (parts.size < 2) return null
+            val json = String(Base64.getUrlDecoder().decode(padBase64(parts[1])))
+            val exp = Json.parseToJsonElement(json).jsonObject["exp"]?.jsonPrimitive?.longOrNull
+            exp?.let { it * 1000 }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun padBase64(s: String): String {
+        val rem = s.length % 4
+        return if (rem == 0) s else s + "=".repeat(4 - rem)
+    }
+
+    /**
+     * Arms a coroutine that silently refreshes the minted token
+     * tokenRefreshLeadMs before it expires (default two minutes). The refresh
+     * updates the cached token; it does NOT tear down the current connection,
+     * because the worker authenticates a token only at handshake - the fresh
+     * token simply needs to be ready for the next (re)connect. Loops so each
+     * refreshed token re-arms the next refresh (FEAT-2026-0824-0040).
+     */
+    private fun scheduleTokenRefresh() {
+        tokenRefreshJob?.cancel()
+        tokenRefreshJob = null
+        if (!isTokenMode) return
+
+        tokenRefreshJob = scope.launch {
+            while (isActive) {
+                val exp = tokenExpiresAt ?: break
+                val delayMs = maxOf(exp - nowMs() - config.tokenRefreshLeadMs, 0L)
+                delay(delayMs)
+                try {
+                    resolveToken()
+                    emitEvent(EventType.TOKEN_REFRESHED, mapOf("expiresAt" to tokenExpiresAt))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Surface but don't crash: the existing connection stays up on
+                    // its already-accepted token; the next reconnect retries.
+                    logger.error(e) { "Token refresh failed" }
+                    emitEvent(EventType.ERROR, OddSocketsException.from(e))
+                    break
+                }
+            }
+        }
+    }
+
+    /** Current wall-clock time in epoch milliseconds. */
+    private fun nowMs(): Long = System.currentTimeMillis()
+
     private suspend fun getWorkerAssignment(): WorkerAssignment {
         // Resolved outside the catch below so that a misconfigured manager URL surfaces as
         // an argument error instead of being reported as a connection failure.
@@ -392,7 +527,12 @@ class OddSocketsClient(
         return try {
             val response = httpClient.get("$managerUrl/api/cluster/select-worker") {
                 header("User-Agent", "OddSockets-Kotlin-SDK/1.0.0")
-                parameter("apiKey", config.apiKey)
+                // Token clients present a minted token; keyed clients present apiKey.
+                if (isTokenMode) {
+                    parameter("token", currentToken)
+                } else {
+                    parameter("apiKey", config.apiKey)
+                }
                 parameter("userId", userId)
                 parameter("clientIdentifier", clientIdentifier)
             }
@@ -508,9 +648,15 @@ class OddSocketsClient(
         when (text[0]) {
             '0' -> {
                 // OPEN — reply with a Socket.IO CONNECT carrying the auth payload.
-                // The worker reads apiKey/userId off socket.handshake.auth.
+                // The worker reads token/apiKey + userId off socket.handshake.auth;
+                // token clients present the minted token in place of the API key.
                 val auth = buildJsonObject {
-                    put("apiKey", config.apiKey)
+                    val token = currentToken
+                    if (isTokenMode && token != null) {
+                        put("token", token)
+                    } else {
+                        put("apiKey", config.apiKey)
+                    }
                     put("userId", userId)
                 }
                 webSocketSession.get()?.send(Frame.Text("40" + auth.toString()))
@@ -834,9 +980,11 @@ class OddSocketsClient(
      * @return Client identifier
      */
     private fun generateClientIdentifier(): String {
-        // Create a consistent identifier based on API key and user ID
+        // Create a consistent identifier based on API key and user ID. Token
+        // clients carry no API key to seed the hash from.
         val baseId = config.userId ?: "default"
-        val apiKeyHash = hashString(config.apiKey)
+        val seed = config.apiKey.ifBlank { "token-client" }
+        val apiKeyHash = hashString(seed)
         return "${apiKeyHash}_${baseId}"
     }
     
