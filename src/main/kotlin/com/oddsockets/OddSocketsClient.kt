@@ -309,6 +309,55 @@ class OddSocketsClient(
     }
     
     /**
+     * Fetches this tenant's headline usage tiles (MAU / DAU / total messages /
+     * error-rate) for the account that owns the configured API key.
+     *
+     * Server contract: `GET {managerUrl}/api/tenant/usage` with the `X-API-Key`
+     * header. Requires an API key — keyless/token-only clients have no owner key
+     * to scope by, so this throws for them.
+     *
+     * HONESTY: any tile the server cannot compute yet comes back as null. This
+     * method preserves null verbatim ([Long]?/[Double]?, never coerced to 0) so
+     * callers can render an em-dash instead of a fabricated zero.
+     *
+     * @return The usage statistics for the owning account.
+     * @throws IllegalStateException if the client is in token/keyless mode with no API key.
+     */
+    suspend fun getUsageStats(): UsageStats {
+        check(!isTokenMode && config.apiKey.isNotBlank()) {
+            "getUsageStats requires an apiKey (keyless/token clients have no owner scope to query)"
+        }
+
+        // Discover the manager exactly as the select-worker call does.
+        val managerUrl = ManagerDiscovery.instance.discoverManagerUrl(config.apiKey, config.managerUrl)
+
+        val response = httpClient.get("$managerUrl/api/tenant/usage") {
+            header("X-API-Key", config.apiKey)
+            header("User-Agent", "OddSockets-Kotlin-SDK/1.0.0")
+        }
+
+        if (!response.status.isSuccess()) {
+            throw GenericException("Usage stats request failed: ${response.status}")
+        }
+
+        val body: String = response.body()
+        val root = Json.parseToJsonElement(body).jsonObject
+        val tiles = root["tiles"]?.jsonObject
+
+        // A missing tile or an explicit JSON null stays null so it is
+        // distinguishable from a real 0.
+        return UsageStats(
+            mau = tiles?.get("mau")?.jsonPrimitive?.longOrNull,
+            dau = tiles?.get("dau")?.jsonPrimitive?.longOrNull,
+            totalMessages = tiles?.get("totalMessages")?.jsonPrimitive?.longOrNull,
+            errorRate = tiles?.get("errorRate")?.jsonPrimitive?.doubleOrNull,
+            ownerScope = root["ownerScope"]?.jsonPrimitive?.contentOrNull,
+            detail = root["detail"]?.takeIf { it !is JsonNull },
+            timestamp = root["timestamp"]?.jsonPrimitive?.contentOrNull
+        )
+    }
+
+    /**
      * Adds an event handler.
      * @param eventType The event type
      * @param handler The event handler
