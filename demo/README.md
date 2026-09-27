@@ -42,7 +42,7 @@ OK - cross-client round-trip verified on demo-718871
 OK - enhanced broadcast receive-path verified (user_typing + reaction_added)
 ```
 
-## 1. Get a free API key
+## 1. Get an API key
 
 Two-step email verification (no card required):
 

@@ -180,7 +180,7 @@ private fun printSignupInstructions() {
         """
         ODDSOCKETS_API_KEY is not set.
 
-        Get a free API key (two-step, no card required):
+        Get an API key (two-step email verification, no card for the first 48h):
 
           curl -X POST https://oddsockets.com/api/agent-signup \
             -H "Content-Type: application/json" \
