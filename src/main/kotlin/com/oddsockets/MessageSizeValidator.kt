@@ -3,7 +3,7 @@ package com.oddsockets
 import com.oddsockets.exception.MessageException
 
 /**
- * Message size limits (industry standard - matches PubNub)
+ * Platform message size limit, enforced server-side
  */
 object MessageSizeLimits {
     const val MAX_MESSAGE_SIZE = 32768 // 32KB in bytes
@@ -13,7 +13,7 @@ object MessageSizeLimits {
 /**
  * Message size validator
  * 
- * Validates message sizes against industry standards to ensure reliable
+ * Validates message sizes against the platform limit to ensure reliable
  * real-time messaging performance.
  */
 object MessageSizeValidator {
@@ -38,7 +38,7 @@ object MessageSizeValidator {
         if (messageSize > MessageSizeLimits.MAX_MESSAGE_SIZE) {
             throw MessageException(
                 "Message size (${messageSize / 1024}KB) exceeds maximum allowed size of ${MessageSizeLimits.MAX_MESSAGE_SIZE_KB}KB. " +
-                "This limit matches industry standards (PubNub, Socket.IO) for reliable real-time messaging."
+                "Split the payload, or publish a reference to it instead."
             )
         }
         
