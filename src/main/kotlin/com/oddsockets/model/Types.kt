@@ -474,6 +474,32 @@ object OddSocketsUtils {
 }
 
 /**
+ * Headline usage analytics for the account that owns the configured API key,
+ * as returned by `GET {managerUrl}/api/tenant/usage`.
+ *
+ * HONESTY: each tile is nullable ([Long]?/[Double]?). Any tile the server cannot
+ * compute yet is preserved as `null` — never coerced to 0 — so callers can
+ * distinguish "unknown" from a real zero.
+ *
+ * @property mau Monthly active users, or null if the server could not compute it.
+ * @property dau Daily active users, or null if the server could not compute it.
+ * @property totalMessages Total messages, or null if the server could not compute it.
+ * @property errorRate Error rate, or null if the server could not compute it.
+ * @property ownerScope The owner scope the tiles are aggregated over.
+ * @property detail Optional additional detail returned by the server, or null.
+ * @property timestamp The server-side timestamp for this snapshot.
+ */
+data class UsageStats(
+    val mau: Long?,
+    val dau: Long?,
+    val totalMessages: Long?,
+    val errorRate: Double?,
+    val ownerScope: String?,
+    val detail: JsonElement?,
+    val timestamp: String?
+)
+
+/**
  * Constants used throughout the SDK.
  */
 object Constants {
