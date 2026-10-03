@@ -186,7 +186,7 @@ class OddSocketsClient(
             scheduleTokenRefresh()
             
             emitEvent(EventType.CONNECTED, mapOf("worker_id" to assignment.workerId, "worker_url" to workerUrl))
-            logger.info { "Connected to OddSockets worker: ${assignment.workerId}" }
+            logger.info { "Connected to OddSockets" }
             
         } catch (e: Exception) {
             updateConnectionState(ConnectionState.FAILED)

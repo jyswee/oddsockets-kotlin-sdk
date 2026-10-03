@@ -1,6 +1,6 @@
 # OddSockets Kotlin SDK - live two-client round-trip PROOF
 #
-# Captured against the LIVE OddSockets platform (worker [instance]).
+# Captured against the LIVE OddSockets platform.
 # Built and run straight from the SDK sources via demo/Dockerfile:
 #
 #   docker build -f demo/Dockerfile -t oddsockets-kotlin-demo .
@@ -32,7 +32,6 @@ METHOD: HttpMethod(value=GET)
 METHOD: HttpMethod(value=GET)
 FROM: wss://worker1-2.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
 14:45:11.030 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connecting -> Connected
-14:45:11.033 [main] INFO com.oddsockets.OddSocketsClient -- Connected to OddSockets worker: [instance]
 14:45:11.033 [main] INFO com.oddsockets.OddSocketsClient -- Connecting to OddSockets...
 14:45:11.033 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Disconnected -> Connecting
 14:45:11.035 [main] INFO io.ktor.client.HttpClient -- REQUEST: https://connect.oddsockets.tyga.network/api/cluster/select-worker?apiKey=ak_...&userId=bob&clientIdentifier=fcqnd1_bob
@@ -46,7 +45,6 @@ METHOD: HttpMethod(value=GET)
 METHOD: HttpMethod(value=GET)
 FROM: wss://worker1-1.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
 14:45:12.175 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connecting -> Connected
-14:45:12.176 [main] INFO com.oddsockets.OddSocketsClient -- Connected to OddSockets worker: [instance]
 [connect] alice = Connected, bob = Connected
 14:45:12.183 [main] INFO com.oddsockets.OddSocketsChannel -- Subscribing to channel: demo-718513
 14:45:12.254 [main] INFO com.oddsockets.OddSocketsChannel -- Successfully subscribed to channel: demo-718513
@@ -98,7 +96,6 @@ METHOD: HttpMethod(value=GET)
 METHOD: HttpMethod(value=GET)
 FROM: wss://worker1-2.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
 14:45:13.683 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connecting -> Connected
-14:45:13.684 [main] INFO com.oddsockets.OddSocketsClient -- Connected to OddSockets worker: [instance]
 14:45:13.684 [main] INFO com.oddsockets.OddSocketsClient -- Connecting to OddSockets...
 14:45:13.684 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Disconnected -> Connecting
 14:45:13.686 [main] INFO io.ktor.client.HttpClient -- REQUEST: https://connect.oddsockets.tyga.network/api/cluster/select-worker?apiKey=ak_...&userId=bob&clientIdentifier=fcqnd1_bob
@@ -112,7 +109,6 @@ METHOD: HttpMethod(value=GET)
 METHOD: HttpMethod(value=GET)
 FROM: wss://worker1-1.oddsockets.tyga.network/socket.io/?EIO=4&transport=websocket
 14:45:14.697 [main] DEBUG com.oddsockets.OddSocketsClient -- Connection state changed: Connecting -> Connected
-14:45:14.697 [main] INFO com.oddsockets.OddSocketsClient -- Connected to OddSockets worker: [instance]
 14:45:14.698 [main] INFO com.oddsockets.OddSocketsChannel -- Subscribing to channel: enh-818341
 14:45:14.773 [main] INFO com.oddsockets.OddSocketsChannel -- Successfully subscribed to channel: enh-818341
 14:45:14.773 [main] DEBUG com.oddsockets.OddSocketsChannel -- Getting presence for channel: enh-818341
